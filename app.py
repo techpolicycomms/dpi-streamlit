@@ -76,14 +76,30 @@ def main() -> None:
         source_label = st.selectbox("Data source", list(source_options.keys()), index=0)
         source_mode = source_options[source_label]
 
-    source_dir = resolve_outputs_dir(source_mode=source_mode)
-    missing_files = list_missing_files(source_dir)
+    selected_dir = resolve_outputs_dir(source_mode=source_mode)
+    selected_missing = list_missing_files(selected_dir)
+    effective_mode = source_mode
+    source_dir = selected_dir
+    missing_files = selected_missing
+
+    # If user-selected mode is broken but auto-mode can resolve, fail-safe to auto.
+    if source_mode != "auto" and selected_missing:
+        auto_dir = resolve_outputs_dir(source_mode="auto")
+        auto_missing = list_missing_files(auto_dir)
+        if not auto_missing:
+            effective_mode = "auto"
+            source_dir = auto_dir
+            missing_files = auto_missing
+            st.warning(
+                "Selected source is missing core files; automatically switched to a valid source."
+            )
+
     st.info(f"Using outputs directory: `{source_dir}`")
     if missing_files:
         st.warning("Missing files in selected source: " + ", ".join(missing_files))
 
     try:
-        data, loaded_dir = load_all(source_mode=source_mode)
+        data, loaded_dir = load_all(source_mode=effective_mode)
     except Exception as exc:
         st.error(f"Failed to load outputs: {exc}")
         st.stop()
