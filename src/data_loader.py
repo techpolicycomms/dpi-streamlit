@@ -6,14 +6,19 @@ from pathlib import Path
 import pandas as pd
 
 
-REQUIRED_FILES = {
+CORE_REQUIRED_FILES = {
     "dpi_v2_scores_all_years": "dpi_v2_scores_all_years.csv",
     "dpi_v2_scores_latest_year": "dpi_v2_scores_latest_year.csv",
     "doughnut_pillar_scores": "doughnut_pillar_scores.csv",
     "dpi_ready_trends": "dpi_ready_trends.csv",
+}
+
+OPTIONAL_FILES = {
     "indicator_correlation_report": "indicator_correlation_report.csv",
     "source_coverage_summary": "source_coverage_summary.csv",
 }
+
+REQUIRED_FILES = {**CORE_REQUIRED_FILES, **OPTIONAL_FILES}
 
 
 def repo_root() -> Path:
@@ -48,7 +53,7 @@ def outputs_dir_from_env() -> Path | None:
 
 def list_missing_files(base_dir: Path) -> list[str]:
     missing = []
-    for file_name in REQUIRED_FILES.values():
+    for file_name in CORE_REQUIRED_FILES.values():
         if not (base_dir / file_name).exists():
             missing.append(file_name)
     return missing

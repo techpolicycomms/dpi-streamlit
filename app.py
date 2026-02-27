@@ -4,7 +4,14 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from src.data_loader import REQUIRED_FILES, list_missing_files, load_csv, resolve_outputs_dir
+from src.data_loader import (
+    CORE_REQUIRED_FILES,
+    OPTIONAL_FILES,
+    REQUIRED_FILES,
+    list_missing_files,
+    load_csv,
+    resolve_outputs_dir,
+)
 
 
 st.set_page_config(page_title="DPI Streamlit V2", page_icon="📊", layout="wide")
@@ -18,9 +25,14 @@ def load_all(source_mode: str) -> tuple[dict[str, pd.DataFrame], str]:
         "v2_latest": load_csv("dpi_v2_scores_latest_year", base_dir=base_dir),
         "doughnut": load_csv("doughnut_pillar_scores", base_dir=base_dir),
         "trends": load_csv("dpi_ready_trends", base_dir=base_dir),
-        "corr": load_csv("indicator_correlation_report", base_dir=base_dir),
-        "coverage": load_csv("source_coverage_summary", base_dir=base_dir),
+        "corr": pd.DataFrame(),
+        "coverage": pd.DataFrame(),
     }
+    for key in OPTIONAL_FILES:
+        try:
+            data["corr" if key == "indicator_correlation_report" else "coverage"] = load_csv(key, base_dir=base_dir)
+        except FileNotFoundError:
+            continue
     return data, str(base_dir)
 
 
@@ -190,13 +202,25 @@ def main() -> None:
             st.dataframe(filtered.sort_values("abs_correlation", ascending=False).head(50), use_container_width=True)
 
         st.subheader("Source Coverage")
-        st.dataframe(coverage, use_container_width=True)
+        if coverage.empty:
+            st.info("`source_coverage_summary.csv` not found. Core app functionality is still available.")
+        else:
+            st.dataframe(coverage, use_container_width=True)
 
         st.subheader("Dataset Health")
         health = pd.DataFrame(
             {
                 "required_file": list(REQUIRED_FILES.values()),
-                "is_present": [file_name not in missing_files for file_name in REQUIRED_FILES.values()],
+                "is_present": [
+                    (file_name not in missing_files)
+                    if file_name in CORE_REQUIRED_FILES.values()
+                    else (source_dir / file_name).exists()
+                    for file_name in REQUIRED_FILES.values()
+                ],
+                "type": [
+                    "core" if file_name in CORE_REQUIRED_FILES.values() else "optional"
+                    for file_name in REQUIRED_FILES.values()
+                ],
             }
         )
         st.dataframe(health, use_container_width=True)
