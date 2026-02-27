@@ -61,6 +61,50 @@ def add_confidence_weighted_score(df: pd.DataFrame, base_col: str) -> pd.DataFra
     return out
 
 
+def build_policy_signal_explainer(v2_sel: pd.DataFrame, score_col: str, latest: pd.Series | None) -> str:
+    if latest is None or score_col not in v2_sel.columns:
+        return "Policy signal is not available for the current selection."
+    series = (
+        v2_sel[["year", score_col]]
+        .dropna()
+        .sort_values("year")
+    )
+    if series.empty:
+        return "Policy signal is not available for the current selection."
+
+    latest_score = float(pd.to_numeric(latest.get(score_col), errors="coerce")) if score_col in latest.index else float(
+        pd.to_numeric(series[score_col].iloc[-1], errors="coerce")
+    )
+    confidence = float(pd.to_numeric(latest.get("dpi_confidence_score"), errors="coerce")) if latest is not None else float("nan")
+    yoy = float(series[score_col].iloc[-1] - series[score_col].iloc[-2]) if len(series) >= 2 else float("nan")
+
+    if pd.isna(yoy):
+        trend_label = "insufficient trend history"
+    elif yoy >= 2:
+        trend_label = "strong positive momentum"
+    elif yoy >= 0:
+        trend_label = "modest positive momentum"
+    elif yoy > -2:
+        trend_label = "mild deterioration"
+    else:
+        trend_label = "material deterioration"
+
+    if pd.isna(confidence):
+        confidence_label = "unknown confidence"
+    elif confidence >= 80:
+        confidence_label = "high confidence"
+    elif confidence >= 60:
+        confidence_label = "medium confidence"
+    else:
+        confidence_label = "low confidence"
+
+    return (
+        f"Latest score is {latest_score:.2f} with {trend_label}. "
+        f"The current evidence quality is {confidence_label}. "
+        "Use this signal as a prioritization input, not as causal proof."
+    )
+
+
 def main() -> None:
     st.title("DPI Dashboard V2 (Streamlit)")
     st.caption("Improved app with data-source routing, V2 score controls, and policy diagnostics.")
@@ -160,7 +204,19 @@ def main() -> None:
         conf = latest.get("dpi_confidence_score")
         c4.metric("Confidence", f"{float(conf):.1f}" if pd.notna(conf) else "N/A")
 
-    tab1, tab2, tab3, tab4 = st.tabs(["Capability Layers", "Doughnut", "Trends", "Diagnostics"])
+    with st.expander("Policy signal explainer", expanded=True):
+        st.write(build_policy_signal_explainer(v2_sel=v2_sel, score_col=score_col, latest=latest))
+        st.markdown(
+            """
+            - **What it means**: A compact decision signal combining score level, direction of change, and confidence.
+            - **How to use it**: Prioritize reforms and sequencing, then validate with sector diagnostics and local evidence.
+            - **How not to use it**: Do not interpret score changes as direct causal effect without identification strategy.
+            """
+        )
+
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(
+        ["Capability Layers", "Doughnut", "Trends", "Diagnostics", "Policy Research Pack"]
+    )
 
     with tab1:
         st.subheader("Readiness vs Adoption vs Impact (selected economy)")
@@ -248,6 +304,82 @@ def main() -> None:
             }
         )
         st.dataframe(health, use_container_width=True)
+
+    with tab5:
+        st.subheader("Policy Problem Statement")
+        st.markdown(
+            """
+            Countries invest in DPI but often track readiness, adoption, impact, and sustainability in disconnected systems.
+            This creates a policy blind spot: governments cannot easily identify where capability exists, where uptake lags,
+            and where digital progress may conflict with inclusion or ecological outcomes.
+            """
+        )
+
+        st.subheader("PhD Research Questions")
+        st.markdown(
+            """
+            1. How can DPI capability be measured as a multidimensional construct across readiness, adoption, and impact?
+            2. Which capability layers are most associated with downstream socioeconomic outcomes?
+            3. How does DPI progress relate to Doughnut-style social foundation and ecological ceiling indicators?
+            4. How sensitive are rankings and policy conclusions to weighting and imputation choices?
+            5. How should confidence and evidence quality be integrated into policy interpretation?
+            6. What practical policy sequencing follows from high-level score patterns and gaps?
+            """
+        )
+
+        st.subheader("Methodology Summary")
+        st.markdown(
+            """
+            - **Construct design**: Formative multidimensional index architecture.
+            - **Normalization**: Robust min-max scaling (P5-P95), with directionality handling.
+            - **Aggregation**: Pillar-level weighted means; cross-layer geometric composite.
+            - **Imputation**: Hierarchical fill strategy with explicit imputation flags.
+            - **Uncertainty**: Coverage and imputation-based confidence score + sensitivity checks.
+            - **Interpretation stance**: Descriptive/diagnostic, not causal identification.
+            """
+        )
+
+        st.subheader("Complete Data Calculation Process")
+        st.markdown(
+            """
+            **Step 1 — Ingestion and mapping**
+            - Load harmonized indicator panel (`economy`, `year`, `indicator_code`, `value`).
+            - Apply indicator metadata: pillar, direction, weights, layer, inclusion/risk tags.
+
+            **Step 2 — Missing-data treatment**
+            - Within-series interpolation/forward-backward fill where possible.
+            - Cross-sectional indicator-year fallback medians.
+            - Global indicator fallback median as last resort.
+            - Track `was_imputed` flags for every record.
+
+            **Step 3 — Orientation and normalization**
+            - Reorient negative indicators (higher should always mean better after orientation).
+            - Apply robust min-max normalization to 0-100.
+
+            **Step 4 — Pillar and V2 layer scores**
+            - Compute weighted pillar scores by economy-year.
+            - Compute V2 readiness/adoption/impact layer means.
+
+            **Step 5 — Composite and adjustments**
+            - Compute geometric composite score (penalizes imbalance across layers).
+            - Compute inclusion-adjusted and risk-adjusted variants.
+            - Compute utilization efficiency and confidence score.
+
+            **Step 6 — Comparative diagnostics**
+            - Produce trends, rank tables, and policy signal narratives.
+            - Produce Doughnut social/ecological diagnostics and gap views.
+            """
+        )
+
+        st.subheader("Policy Interpretation Guardrails")
+        st.markdown(
+            """
+            - Compare score changes with confidence tier before taking major policy action.
+            - Treat small rank differences as non-material unless sustained across years.
+            - Combine quantitative signals with institutional and implementation context.
+            - Use indicators as a steering system for prioritization, not as a final impact claim.
+            """
+        )
 
 
 if __name__ == "__main__":
