@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pandas as pd
 import plotly.express as px
 import streamlit as st
@@ -67,6 +69,25 @@ def supports_ols_trendline() -> bool:
     except Exception:
         return False
     return True
+
+
+@st.cache_data
+def load_india_pipeline_data() -> pd.DataFrame:
+    path = Path(__file__).resolve().parent / "data" / "india_pipeline" / "dclo_state_year.csv"
+    if not path.exists():
+        return pd.DataFrame()
+    df = pd.read_csv(path)
+    df["year"] = pd.to_numeric(df.get("year"), errors="coerce")
+    return df
+
+
+def minmax_0_100(series: pd.Series) -> pd.Series:
+    vals = pd.to_numeric(series, errors="coerce")
+    lo = vals.min(skipna=True)
+    hi = vals.max(skipna=True)
+    if pd.isna(lo) or pd.isna(hi) or hi <= lo:
+        return pd.Series([50.0] * len(vals), index=series.index)
+    return 100.0 * (vals - lo) / (hi - lo)
 
 
 def build_policy_signal_explainer(v2_sel: pd.DataFrame, score_col: str, latest: pd.Series | None) -> str:
@@ -177,6 +198,7 @@ def main() -> None:
     trends = data["trends"]
     corr = data["corr"]
     coverage = data["coverage"]
+    india_raw = load_india_pipeline_data()
 
     v2_all["year"] = pd.to_numeric(v2_all["year"], errors="coerce")
     v2_latest["year"] = pd.to_numeric(v2_latest["year"], errors="coerce")
@@ -313,6 +335,72 @@ def main() -> None:
             yoy = v2_sel[["year", score_col]].dropna().sort_values("year")
             yoy["yoy_change"] = yoy[score_col].diff()
             st.dataframe(yoy.sort_values("year", ascending=False), use_container_width=True)
+
+        if economy == "India" and not india_raw.empty:
+            st.subheader("India Boost from Data Pipelines Project")
+            india_signal_col = "DCLO_score_context_adjusted" if "DCLO_score_context_adjusted" in india_raw.columns else "DCLO_score"
+            india_agg = (
+                india_raw.groupby("year", dropna=True)
+                .agg(
+                    india_state_signal=(india_signal_col, "mean"),
+                    india_state_count=("state_name", "nunique"),
+                    india_acc=("ACC_score", "mean"),
+                    india_skl=("SKL_score", "mean"),
+                    india_srv=("SRV_score", "mean"),
+                    india_agr=("AGR_score", "mean"),
+                    india_eco=("ECO_score", "mean"),
+                    india_out=("OUT_score", "mean"),
+                )
+                .reset_index()
+            )
+            boost = v2_sel.merge(india_agg, on="year", how="inner")
+            if not boost.empty and score_col in boost.columns:
+                boost = boost.sort_values("year")
+                boost["dpi_norm"] = minmax_0_100(boost[score_col])
+                boost["india_state_norm"] = minmax_0_100(boost["india_state_signal"])
+                boost["boosted_signal"] = 0.7 * boost["dpi_norm"] + 0.3 * boost["india_state_norm"]
+                boost["boost_uplift"] = boost["boosted_signal"] - boost["dpi_norm"]
+
+                latest_boost = boost.iloc[-1]
+                b1, b2, b3 = st.columns(3)
+                b1.metric("India state coverage", f"{int(latest_boost['india_state_count'])}")
+                b2.metric("Boosted signal (latest)", f"{float(latest_boost['boosted_signal']):.2f}")
+                b3.metric("Uplift vs DPI-only", f"{float(latest_boost['boost_uplift']):+.2f}")
+
+                boost_long = boost.melt(
+                    id_vars=["year"],
+                    value_vars=["dpi_norm", "india_state_norm", "boosted_signal"],
+                    var_name="metric",
+                    value_name="score",
+                )
+                fig_boost = px.line(
+                    boost_long,
+                    x="year",
+                    y="score",
+                    color="metric",
+                    markers=True,
+                    title="India boost view: DPI + state-level DCLO signal",
+                )
+                st.plotly_chart(fig_boost, use_container_width=True)
+
+                if "ACC_score" in india_raw.columns:
+                    latest_year_india = int(india_raw["year"].dropna().max())
+                    state_latest = india_raw[india_raw["year"] == latest_year_india].copy()
+                    state_score_col = (
+                        "DCLO_score_context_adjusted"
+                        if "DCLO_score_context_adjusted" in state_latest.columns
+                        else "DCLO_score"
+                    )
+                    state_latest[state_score_col] = pd.to_numeric(state_latest[state_score_col], errors="coerce")
+                    state_latest = state_latest.dropna(subset=[state_score_col]).sort_values(state_score_col, ascending=False)
+                    st.caption(f"Latest state snapshot ({latest_year_india})")
+                    st.dataframe(
+                        state_latest[["state_name", state_score_col, "ACC_score", "SKL_score", "SRV_score", "AGR_score", "ECO_score", "OUT_score"]]
+                        .head(10),
+                        use_container_width=True,
+                    )
+            else:
+                st.info("India boost view is unavailable for the selected year range.")
 
     with tab2:
         st.subheader("Doughnut Scores")
