@@ -120,7 +120,13 @@ def main() -> None:
         source_label = st.selectbox("Data source", list(source_options.keys()), index=0)
         source_mode = source_options[source_label]
 
-    selected_dir = resolve_outputs_dir(source_mode=source_mode)
+    try:
+        selected_dir = resolve_outputs_dir(source_mode=source_mode)
+    except ValueError:
+        # Most common case: source_mode='env' but DPI_OUTPUTS_DIR is not defined.
+        source_mode = "auto"
+        selected_dir = resolve_outputs_dir(source_mode=source_mode)
+        st.warning("`DPI_OUTPUTS_DIR` is not set; switched data source to Auto.")
     selected_missing = list_missing_files(selected_dir)
     effective_mode = source_mode
     source_dir = selected_dir
