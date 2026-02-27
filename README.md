@@ -7,9 +7,10 @@ The immediate objective is **result parity**: serve the same KPI tables/charts f
 ## What This Repo Does Today
 
 - Runs a Streamlit dashboard from Python only.
-- Reads existing DPI outputs from the legacy project (`../DPI/outputs`).
+- Reads DPI outputs from configurable sources (auto/env/repo/snapshot/legacy).
 - Keeps metric parity by consuming the same output artifacts already used by Shiny.
 - Supports optional snapshotting of legacy outputs into this repo.
+- Provides V2 dashboard controls (score mode, confidence weighting, trust-tier filtering, rankings).
 
 ## Local Setup
 
@@ -26,14 +27,14 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-By default, the app reads from:
+The app supports multiple data-source modes from the sidebar.  
+For cloud deployment, the easiest path is setting `DPI_OUTPUTS_DIR`.
 
-- `../DPI/outputs`
-
-You can override this path with:
+Optional environment variables:
 
 ```bash
 export DPI_LEGACY_ROOT="/absolute/path/to/DPI"
+export DPI_OUTPUTS_DIR="/absolute/path/to/outputs"
 ```
 
 ## Optional: Snapshot Outputs Into This Repo

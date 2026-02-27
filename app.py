@@ -4,22 +4,24 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from src.data_loader import load_csv, outputs_dir, resolve_legacy_root
+from src.data_loader import REQUIRED_FILES, list_missing_files, load_csv, resolve_outputs_dir
 
 
-st.set_page_config(page_title="DPI Streamlit Parallel", page_icon="📊", layout="wide")
+st.set_page_config(page_title="DPI Streamlit V2", page_icon="📊", layout="wide")
 
 
 @st.cache_data
-def load_all() -> dict[str, pd.DataFrame]:
-    return {
-        "v2_all": load_csv("dpi_v2_scores_all_years"),
-        "v2_latest": load_csv("dpi_v2_scores_latest_year"),
-        "doughnut": load_csv("doughnut_pillar_scores"),
-        "trends": load_csv("dpi_ready_trends"),
-        "corr": load_csv("indicator_correlation_report"),
-        "coverage": load_csv("source_coverage_summary"),
+def load_all(source_mode: str) -> tuple[dict[str, pd.DataFrame], str]:
+    base_dir = resolve_outputs_dir(source_mode=source_mode)
+    data = {
+        "v2_all": load_csv("dpi_v2_scores_all_years", base_dir=base_dir),
+        "v2_latest": load_csv("dpi_v2_scores_latest_year", base_dir=base_dir),
+        "doughnut": load_csv("doughnut_pillar_scores", base_dir=base_dir),
+        "trends": load_csv("dpi_ready_trends", base_dir=base_dir),
+        "corr": load_csv("indicator_correlation_report", base_dir=base_dir),
+        "coverage": load_csv("source_coverage_summary", base_dir=base_dir),
     }
+    return data, str(base_dir)
 
 
 def latest_for_economy(df: pd.DataFrame, economy: str) -> pd.Series | None:
@@ -30,17 +32,50 @@ def latest_for_economy(df: pd.DataFrame, economy: str) -> pd.Series | None:
     return part.sort_values("year").iloc[-1]
 
 
-def main() -> None:
-    st.title("DPI Dashboard (Parallel Streamlit Migration)")
-    st.caption("Parity-first Python dashboard using the same output artifacts as the Shiny app.")
+def select_score_column(score_mode: str) -> str:
+    if score_mode == "Inclusion-adjusted":
+        return "dpi_inclusion_adjusted_v2"
+    if score_mode == "Risk-adjusted":
+        return "dpi_risk_adjusted_v2"
+    return "dpi_composite_v2"
 
-    st.info(f"Legacy source: `{resolve_legacy_root()}` | Outputs: `{outputs_dir()}`")
+
+def add_confidence_weighted_score(df: pd.DataFrame, base_col: str) -> pd.DataFrame:
+    out = df.copy()
+    if base_col not in out.columns:
+        return out
+    confidence = pd.to_numeric(out.get("dpi_confidence_score"), errors="coerce").fillna(0) / 100.0
+    out["score_confidence_weighted"] = pd.to_numeric(out[base_col], errors="coerce") * confidence
+    return out
+
+
+def main() -> None:
+    st.title("DPI Dashboard V2 (Streamlit)")
+    st.caption("Improved app with data-source routing, V2 score controls, and policy diagnostics.")
+
+    source_options = {
+        "Auto": "auto",
+        "Env path (DPI_OUTPUTS_DIR)": "env",
+        "Repo outputs": "repo",
+        "Snapshot outputs": "snapshot",
+        "Legacy DPI outputs": "legacy",
+    }
+    with st.sidebar:
+        source_label = st.selectbox("Data source", list(source_options.keys()), index=0)
+        source_mode = source_options[source_label]
+
+    source_dir = resolve_outputs_dir(source_mode=source_mode)
+    missing_files = list_missing_files(source_dir)
+    st.info(f"Using outputs directory: `{source_dir}`")
+    if missing_files:
+        st.warning("Missing files in selected source: " + ", ".join(missing_files))
 
     try:
-        data = load_all()
+        data, loaded_dir = load_all(source_mode=source_mode)
     except Exception as exc:
-        st.error(f"Failed to load legacy outputs: {exc}")
+        st.error(f"Failed to load outputs: {exc}")
         st.stop()
+    st.caption(f"Loaded from: `{loaded_dir}`")
 
     v2_all = data["v2_all"]
     v2_latest = data["v2_latest"]
@@ -49,21 +84,35 @@ def main() -> None:
     corr = data["corr"]
     coverage = data["coverage"]
 
+    v2_all["year"] = pd.to_numeric(v2_all["year"], errors="coerce")
+    v2_latest["year"] = pd.to_numeric(v2_latest["year"], errors="coerce")
+    doughnut["year"] = pd.to_numeric(doughnut["year"], errors="coerce")
+    trends["year"] = pd.to_numeric(trends.get("year"), errors="coerce")
+
     economies = sorted(v2_all["economy"].dropna().astype(str).unique().tolist())
+    if not economies:
+        st.error("No economies found in v2 dataset.")
+        st.stop()
     default_economy = "India" if "India" in economies else economies[0]
 
     with st.sidebar:
         economy = st.selectbox("Economy", economies, index=economies.index(default_economy))
-        year_min = int(pd.to_numeric(v2_all["year"], errors="coerce").min())
-        year_max = int(pd.to_numeric(v2_all["year"], errors="coerce").max())
-        year_range = st.slider("Year Range", year_min, year_max, (max(year_min, 2014), year_max))
+        year_min = int(v2_all["year"].min())
+        year_max = int(v2_all["year"].max())
+        year_range = st.slider("Year range", year_min, year_max, (max(year_min, 2014), year_max))
+        score_mode = st.selectbox("V2 score mode", ["Composite", "Inclusion-adjusted", "Risk-adjusted"], index=0)
+        use_confidence_weight = st.checkbox("Confidence-weight score", value=False)
+        trust_tiers = st.multiselect("Trust tier filter", ["High", "Medium", "Low"], default=["High", "Medium", "Low"])
+        top_n = st.slider("Top N ranking rows", 5, 30, 15)
+
+    base_score_col = select_score_column(score_mode=score_mode)
 
     v2_sel = v2_all[(v2_all["economy"] == economy)].copy()
-    v2_sel["year"] = pd.to_numeric(v2_sel["year"], errors="coerce")
     v2_sel = v2_sel[(v2_sel["year"] >= year_range[0]) & (v2_sel["year"] <= year_range[1])]
+    v2_sel = add_confidence_weighted_score(v2_sel, base_col=base_score_col)
+    score_col = "score_confidence_weighted" if use_confidence_weight else base_score_col
 
     doughnut_sel = doughnut[(doughnut["economy"] == economy)].copy()
-    doughnut_sel["year"] = pd.to_numeric(doughnut_sel["year"], errors="coerce")
     doughnut_sel = doughnut_sel[(doughnut_sel["year"] >= year_range[0]) & (doughnut_sel["year"] <= year_range[1])]
 
     latest = latest_for_economy(v2_latest, economy)
@@ -78,13 +127,33 @@ def main() -> None:
     tab1, tab2, tab3, tab4 = st.tabs(["Capability Layers", "Doughnut", "Trends", "Diagnostics"])
 
     with tab1:
-        st.subheader("Readiness vs Adoption vs Impact")
-        plot_cols = [c for c in ["dpi_readiness_v2", "dpi_adoption_v2", "dpi_impact_v2"] if c in v2_sel.columns]
+        st.subheader("Readiness vs Adoption vs Impact (selected economy)")
+        plot_cols = [c for c in ["dpi_readiness_v2", "dpi_adoption_v2", "dpi_impact_v2", score_col] if c in v2_sel.columns]
         if plot_cols and not v2_sel.empty:
             long_df = v2_sel.melt(id_vars=["year"], value_vars=plot_cols, var_name="metric", value_name="score")
             fig = px.line(long_df, x="year", y="score", color="metric", markers=True)
             st.plotly_chart(fig, use_container_width=True)
         st.dataframe(v2_sel.sort_values("year", ascending=False), use_container_width=True)
+
+        st.subheader("Latest Year Cross-Economy Ranking")
+        latest_year = int(v2_all["year"].max())
+        rank_df = v2_all[v2_all["year"] == latest_year].copy()
+        if "confidence_tier" in rank_df.columns:
+            rank_df = rank_df[rank_df["confidence_tier"].isin(trust_tiers)]
+        rank_df = add_confidence_weighted_score(rank_df, base_col=base_score_col)
+        rank_score_col = "score_confidence_weighted" if use_confidence_weight else base_score_col
+        rank_df[rank_score_col] = pd.to_numeric(rank_df[rank_score_col], errors="coerce")
+        rank_df = rank_df.dropna(subset=[rank_score_col]).sort_values(rank_score_col, ascending=False).head(top_n)
+        if not rank_df.empty:
+            fig_rank = px.bar(rank_df, x=rank_score_col, y="economy", orientation="h", title=f"Top {top_n} in {latest_year}")
+            fig_rank.update_layout(yaxis={"categoryorder": "total ascending"})
+            st.plotly_chart(fig_rank, use_container_width=True)
+
+        st.subheader("Policy Signal: Year-over-Year Movement")
+        if score_col in v2_sel.columns and len(v2_sel) >= 2:
+            yoy = v2_sel[["year", score_col]].dropna().sort_values("year")
+            yoy["yoy_change"] = yoy[score_col].diff()
+            st.dataframe(yoy.sort_values("year", ascending=False), use_container_width=True)
 
     with tab2:
         st.subheader("Doughnut Scores")
@@ -96,11 +165,14 @@ def main() -> None:
         st.dataframe(doughnut_sel.sort_values("year", ascending=False), use_container_width=True)
 
     with tab3:
-        st.subheader("Legacy Trend Output")
+        st.subheader("Trend Output")
         trend_sel = trends[trends["economy"] == economy].copy() if "economy" in trends.columns else pd.DataFrame()
         if not trend_sel.empty and "dpi_score" in trend_sel.columns:
             fig = px.line(trend_sel.sort_values("year"), x="year", y="dpi_score", markers=True)
             st.plotly_chart(fig, use_container_width=True)
+            if "yoy_change" in trend_sel.columns:
+                fig_yoy = px.bar(trend_sel.sort_values("year"), x="year", y="yoy_change", title="YoY Change")
+                st.plotly_chart(fig_yoy, use_container_width=True)
         st.dataframe(trend_sel.sort_values("year", ascending=False), use_container_width=True)
 
     with tab4:
@@ -108,10 +180,26 @@ def main() -> None:
         if not corr.empty:
             corr["correlation"] = pd.to_numeric(corr.get("correlation"), errors="coerce")
             corr["abs_correlation"] = corr["correlation"].abs()
-            top = corr.sort_values("abs_correlation", ascending=False).head(20)
-            st.dataframe(top, use_container_width=True)
+            threshold = st.slider("Absolute correlation threshold", 0.0, 1.0, 0.7, 0.05)
+            sign = st.selectbox("Correlation sign", ["Any", "Positive", "Negative"], index=0)
+            filtered = corr[corr["abs_correlation"] >= threshold].copy()
+            if sign == "Positive":
+                filtered = filtered[filtered["correlation"] > 0]
+            elif sign == "Negative":
+                filtered = filtered[filtered["correlation"] < 0]
+            st.dataframe(filtered.sort_values("abs_correlation", ascending=False).head(50), use_container_width=True)
+
         st.subheader("Source Coverage")
         st.dataframe(coverage, use_container_width=True)
+
+        st.subheader("Dataset Health")
+        health = pd.DataFrame(
+            {
+                "required_file": list(REQUIRED_FILES.values()),
+                "is_present": [file_name not in missing_files for file_name in REQUIRED_FILES.values()],
+            }
+        )
+        st.dataframe(health, use_container_width=True)
 
 
 if __name__ == "__main__":
