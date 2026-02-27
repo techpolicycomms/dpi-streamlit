@@ -175,14 +175,16 @@ def main() -> None:
     doughnut["year"] = pd.to_numeric(doughnut["year"], errors="coerce")
     trends["year"] = pd.to_numeric(trends.get("year"), errors="coerce")
 
-    economies = sorted(v2_all["economy"].dropna().astype(str).unique().tolist())
+    economies_all = sorted(v2_all["economy"].dropna().astype(str).unique().tolist())
+    focus_economies = [e for e in ["India", "Switzerland"] if e in economies_all]
+    economies = focus_economies if focus_economies else economies_all
     if not economies:
         st.error("No economies found in v2 dataset.")
         st.stop()
     default_economy = "India" if "India" in economies else economies[0]
 
     with st.sidebar:
-        economy = st.selectbox("Economy", economies, index=economies.index(default_economy))
+        economy = st.selectbox("Economy (focused)", economies, index=economies.index(default_economy))
         year_min = int(v2_all["year"].min())
         year_max = int(v2_all["year"].max())
         year_range = st.slider("Year range", year_min, year_max, (max(year_min, 2014), year_max))
@@ -221,21 +223,69 @@ def main() -> None:
         )
 
     tab1, tab2, tab3, tab4, tab5 = st.tabs(
-        ["Capability Layers", "Doughnut", "Trends", "Diagnostics", "Policy Research Pack"]
+        ["DPI ↔ Doughnut Linkage", "Doughnut", "Trends", "Diagnostics", "Policy Research Pack"]
     )
 
     with tab1:
-        st.subheader("Readiness vs Adoption vs Impact (selected economy)")
+        st.subheader("DPI Enabling Pillars and Doughnut Linkage")
         plot_cols = [c for c in ["dpi_readiness_v2", "dpi_adoption_v2", "dpi_impact_v2", score_col] if c in v2_sel.columns]
         if plot_cols and not v2_sel.empty:
             long_df = v2_sel.melt(id_vars=["year"], value_vars=plot_cols, var_name="metric", value_name="score")
             fig = px.line(long_df, x="year", y="score", color="metric", markers=True)
             st.plotly_chart(fig, use_container_width=True)
+
+        linkage = v2_sel.merge(
+            doughnut_sel[
+                [
+                    c
+                    for c in [
+                        "year",
+                        "social_foundation_score",
+                        "ecological_ceiling_score",
+                        "doughnut_score",
+                    ]
+                    if c in doughnut_sel.columns
+                ]
+            ],
+            on="year",
+            how="inner",
+        )
+        if not linkage.empty:
+            st.subheader("Pillar-to-Doughnut Trend Overlay")
+            trend_cols = [
+                c
+                for c in [
+                    "dpi_readiness_v2",
+                    "dpi_adoption_v2",
+                    "dpi_impact_v2",
+                    "social_foundation_score",
+                    "doughnut_score",
+                ]
+                if c in linkage.columns
+            ]
+            if trend_cols:
+                trend_long = linkage.melt(id_vars=["year"], value_vars=trend_cols, var_name="metric", value_name="score")
+                fig_link_trend = px.line(trend_long, x="year", y="score", color="metric", markers=True)
+                st.plotly_chart(fig_link_trend, use_container_width=True)
+
+            st.subheader("Pillar-to-Doughnut Relationship")
+            if "dpi_readiness_v2" in linkage.columns and "doughnut_score" in linkage.columns:
+                fig_scatter = px.scatter(
+                    linkage,
+                    x="dpi_readiness_v2",
+                    y="doughnut_score",
+                    text="year",
+                    trendline="ols",
+                    title="Readiness vs Doughnut Score",
+                )
+                fig_scatter.update_traces(textposition="top center")
+                st.plotly_chart(fig_scatter, use_container_width=True)
+
         st.dataframe(v2_sel.sort_values("year", ascending=False), use_container_width=True)
 
-        st.subheader("Latest Year Cross-Economy Ranking")
+        st.subheader("Latest Year Focus Comparison")
         latest_year = int(v2_all["year"].max())
-        rank_df = v2_all[v2_all["year"] == latest_year].copy()
+        rank_df = v2_all[(v2_all["year"] == latest_year) & (v2_all["economy"].isin(economies))].copy()
         if "confidence_tier" in rank_df.columns:
             rank_df = rank_df[rank_df["confidence_tier"].isin(trust_tiers)]
         rank_df = add_confidence_weighted_score(rank_df, base_col=base_score_col)
