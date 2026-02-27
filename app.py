@@ -82,14 +82,22 @@ def main() -> None:
     source_dir = selected_dir
     missing_files = selected_missing
 
-    # If user-selected mode is broken but auto-mode can resolve, fail-safe to auto.
+    # If user-selected mode is broken, try safer fallbacks in priority order.
     if source_mode != "auto" and selected_missing:
-        auto_dir = resolve_outputs_dir(source_mode="auto")
-        auto_missing = list_missing_files(auto_dir)
-        if not auto_missing:
-            effective_mode = "auto"
-            source_dir = auto_dir
-            missing_files = auto_missing
+        fallback_modes = ["repo", "snapshot", "auto"]
+        switched = False
+        for mode in fallback_modes:
+            if mode == source_mode:
+                continue
+            candidate_dir = resolve_outputs_dir(source_mode=mode)
+            candidate_missing = list_missing_files(candidate_dir)
+            if not candidate_missing:
+                effective_mode = mode
+                source_dir = candidate_dir
+                missing_files = candidate_missing
+                switched = True
+                break
+        if switched:
             st.warning(
                 "Selected source is missing core files; automatically switched to a valid source."
             )
