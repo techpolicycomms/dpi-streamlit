@@ -61,6 +61,14 @@ def add_confidence_weighted_score(df: pd.DataFrame, base_col: str) -> pd.DataFra
     return out
 
 
+def supports_ols_trendline() -> bool:
+    try:
+        import statsmodels.api  # type: ignore  # noqa: F401
+    except Exception:
+        return False
+    return True
+
+
 def build_policy_signal_explainer(v2_sel: pd.DataFrame, score_col: str, latest: pd.Series | None) -> str:
     if latest is None or score_col not in v2_sel.columns:
         return "Policy signal is not available for the current selection."
@@ -270,16 +278,19 @@ def main() -> None:
 
             st.subheader("Pillar-to-Doughnut Relationship")
             if "dpi_readiness_v2" in linkage.columns and "doughnut_score" in linkage.columns:
+                trendline_mode = "ols" if supports_ols_trendline() else None
                 fig_scatter = px.scatter(
                     linkage,
                     x="dpi_readiness_v2",
                     y="doughnut_score",
                     text="year",
-                    trendline="ols",
+                    trendline=trendline_mode,
                     title="Readiness vs Doughnut Score",
                 )
                 fig_scatter.update_traces(textposition="top center")
                 st.plotly_chart(fig_scatter, use_container_width=True)
+                if trendline_mode is None:
+                    st.caption("Trendline disabled: `statsmodels` not installed in current environment.")
 
         st.dataframe(v2_sel.sort_values("year", ascending=False), use_container_width=True)
 
